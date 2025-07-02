@@ -67,7 +67,7 @@ You can use promises to a provide a bounded RPC call chain:
 
 	type RPCServer struct {
 		fset fsets.Fset[RPCRequest]
-		in  chan<- promises.Promise[RPCRequest, RPCResponse]
+		in  fsets.PromiseQueue[RPCRequest, RPCResponse]
 	}
 
 	func New(ctx context.Context) *RPCServer {
@@ -144,7 +144,7 @@ You can also do an ordered pipeline by using the WithPipeline option when callin
 		defer close(in) // Close the input channel when done.
 		for _, data := range inputData{
 			p := fset.Promise(data)
-			in <- p
+			in.Send(ctx, p) // Send the promise to the input channel.
 		}
 	}()
 
@@ -344,7 +344,9 @@ func WithPipeline[T any](out chan promises.Promise[StateObject[T], StateObject[T
 }
 
 // PromiseQueue is a channel that can be used to send promises to the Fset for parallel or concurrent execution.
-type PromiseQueue[T any] chan<- promises.Promise[StateObject[T], StateObject[T]]
+type PromiseQueue[T any] struct {
+	ch chan promises.Promise[StateObject[T], StateObject[T]]
+}
 
 // Send sends a promise to the PromiseQueue. This is a blocking call until the promise is sent or the context is done.
 // The context is attached to the StateObject in the promise, so it can be used for cancelation.
@@ -353,9 +355,15 @@ func (pq PromiseQueue[T]) Send(ctx context.Context, p promises.Promise[StateObje
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
-	case pq <- p:
+	case pq.ch <- p:
 	}
 	return nil
+}
+
+// Closes the queue which will shut down the goroutines that are processing the promises once current operations
+// are done.
+func (pq PromiseQueue[T]) Close() {
+	close(pq.ch)
 }
 
 // Parallel sets up a channel to run the Fset in parallel. This will spawn n goroutines that will execute this
@@ -364,7 +372,7 @@ func (pq PromiseQueue[T]) Send(ctx context.Context, p promises.Promise[StateObje
 // The context passed cannot be canceled. Control cancelation in the StateObject.Ctx, which works only if your functions support
 // it. The returned sync.Group can be used to wait for all goroutines to finish after closing the channel, if that is desired.
 // Use the Promise() method to create a new promise for the Fset to use with this channel.
-func (f *Fset[T]) Parallel(ctx context.Context, n int, options ...ParallelOption[T]) (chan<- promises.Promise[StateObject[T], StateObject[T]], *sync.Group) {
+func (f *Fset[T]) Parallel(ctx context.Context, n int, options ...ParallelOption[T]) (PromiseQueue[T], *sync.Group) {
 	return f.parallel(ctx, n, options...)
 }
 
@@ -372,7 +380,7 @@ func (f *Fset[T]) Parallel(ctx context.Context, n int, options ...ParallelOption
 // each C in the Fset concurrently. This means there are n * len(fset) goroutines running concurrently. Have 4 C's in the Fset, and
 // n == 2 will result in up to 8 different function calls running concurrently. If n < 1, it will use gomaxprocs to determine the
 // number of goroutines to run. Use the Promise() method to create a new promise for the Fset to use with this channel.
-func (f *Fset[T]) Concurrent(ctx context.Context, n int, options ...ParallelOption[T]) (chan<- promises.Promise[StateObject[T], StateObject[T]], *sync.Group) {
+func (f *Fset[T]) Concurrent(ctx context.Context, n int, options ...ParallelOption[T]) (PromiseQueue[T], *sync.Group) {
 	// In reality, using numParallel * numStages is the same as spawning X goroutines for stages connected with channels and
 	// x parallel goroutines for a set of stages. This avoids a lot of that overhead.
 	if n < 1 {
@@ -382,7 +390,7 @@ func (f *Fset[T]) Concurrent(ctx context.Context, n int, options ...ParallelOpti
 	return f.parallel(ctx, n, options...)
 }
 
-func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption[T]) (chan<- promises.Promise[StateObject[T], StateObject[T]], *sync.Group) {
+func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption[T]) (PromiseQueue[T], *sync.Group) {
 	if len(f.set) == 0 {
 		panic("Fset.Concurrent called with no functions in the set")
 	}
@@ -398,11 +406,11 @@ func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption
 
 	g := context.Pool(ctx).Limited(n).Group()
 
-	ch := make(chan promises.Promise[StateObject[T], StateObject[T]], 1)
+	pq := PromiseQueue[T]{ch: make(chan promises.Promise[StateObject[T], StateObject[T]], 1)}
 	ctxNoCancel := context.WithoutCancel(ctx)
 
 	// This is not in the limited pool(p) because this is the controller for the parallel execution.
-	context.Pool(ctx).Submit(
+	context.Pool(ctxNoCancel).Submit(
 		ctxNoCancel,
 		func() {
 			if po.out != nil {
@@ -416,7 +424,7 @@ func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption
 				}()
 			}
 
-			for promise := range ch {
+			for promise := range pq.ch {
 				so := promise.In
 				g.Go(
 					ctxNoCancel,
@@ -434,7 +442,7 @@ func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption
 		},
 	)
 
-	return ch, &g
+	return pq, &g
 }
 
 // Promise helps create a new promise for the Fset for use with the Parallel or Concurrent methods.

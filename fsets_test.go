@@ -167,12 +167,12 @@ func TestParallel(t *testing.T) {
 	promises := make([]promises.Promise[StateObject[Data], StateObject[Data]], 0, 5)
 	for range 5 {
 		p := set.Promise(Data{count: 0})
-		in <- p
+		in.Send(t.Context(), p)
 		promises = append(promises, p)
 	}
 	// This one should error.
 	p := set.Promise(Data{count: -1})
-	in <- p
+	in.Send(t.Context(), p)
 
 	_ = wait.Wait(t.Context())
 
@@ -214,12 +214,12 @@ func TestWithPipeline(t *testing.T) {
 	go func() {
 		for range 5 {
 			p := set.Promise(Data{count: 0})
-			in <- p
+			in.Send(t.Context(), p)
 		}
 		// This one should error.
 		p := set.Promise(Data{count: -1})
-		in <- p
-		close(in)
+		in.Send(t.Context(), p)
+		in.Close()
 	}()
 
 	errCount := 0
