@@ -65,7 +65,7 @@ func TestExec(t *testing.T) {
 
 	for _, test := range tests {
 		so := StateObject[Data]{}
-		so.ctx = t.Context()
+		so.Ctx = t.Context()
 		so, err := test.c.exec(so)
 		switch {
 		case test.wantErr && err == nil:

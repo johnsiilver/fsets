@@ -200,8 +200,8 @@ type StateObject[T any] struct {
 	// Data is any data related to this call.
 	Data T
 
-	// ctx is the context for this call. If a context is not provided, it will default to context.Background().
-	ctx context.Context
+	// Ctx is the context for this call. If a context is not provided, it will default to context.Background().
+	Ctx context.Context
 
 	// err is an error that can be set by any function in the call chain. If this is set, the call chain will stop.
 	err  error
@@ -228,7 +228,7 @@ func (s *StateObject[T]) GetStop() bool {
 // SetCtx sets the context for the StateObject. This is not used by users but is provided for
 // the fsets compiler.
 func (s *StateObject[T]) SetCtx(ctx context.Context) {
-	s.ctx = ctx
+	s.Ctx = ctx
 }
 
 // SetErr sets an error on the StateObject. This will stop the call chain and return the error in Err().
@@ -256,7 +256,7 @@ func (c C[T]) exec(so StateObject[T]) (StateObject[T], error) {
 		return c.F(so)
 	}
 	err := c.B.Retry(
-		so.ctx,
+		so.Ctx,
 		func(context.Context, exponential.Record) error {
 			var err error
 			so, err = c.F(so)
@@ -308,7 +308,7 @@ func (f *Fset[T]) Run(ctx context.Context, so StateObject[T]) StateObject[T] {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	so.ctx = ctx
+	so.Ctx = ctx
 
 	if f.compiled != nil {
 		// If we have a compiled version, use that.
@@ -351,7 +351,7 @@ type PromiseQueue[T any] struct {
 // Send sends a promise to the PromiseQueue. This is a blocking call until the promise is sent or the context is done.
 // The context is attached to the StateObject in the promise, so it can be used for cancelation.
 func (pq PromiseQueue[T]) Send(ctx context.Context, p promises.Promise[StateObject[T], StateObject[T]]) error {
-	p.In.ctx = ctx // Ensure the context is set on the StateObject.
+	p.In.Ctx = ctx // Ensure the context is set on the StateObject.
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -430,7 +430,7 @@ func (f *Fset[T]) parallel(ctx context.Context, n int, options ...ParallelOption
 					ctxNoCancel,
 					func(ctx context.Context) error {
 						// Run the Fset with the provided StateObject.
-						result := f.Run(so.ctx, so)
+						result := f.Run(so.Ctx, so)
 						promise.Set(ctxNoCancel, result, result.Err())
 						if po.out != nil {
 							po.out <- promise
